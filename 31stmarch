@@ -1,0 +1,224 @@
+CREATE OR REPLACE FUNCTION is_date(p_date IN VARCHAR2, p_format IN VARCHAR2)
+RETURN VARCHAR2 IS
+    v_date DATE;
+BEGIN
+    v_date := TO_DATE(p_date, p_format);
+    RETURN 'Y';
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN 'N';
+END is_date;
+
+
+SELECT LISTINGDATE
+FROM imke.tmp_crb_accounts@edwdblnk
+WHERE is_date(LISTINGDATE, 'DD-MM-YYYY') = 'N';
+-----------------------------------------------------------------------------
+
+--DAYS PAST DUE
+-----------------------------------------
+WITH cte AS (
+SELECT
+	NATIONALID,
+	TO_NUMBER(
+            CASE 
+                WHEN WORSTDAYSINARREARS = 'NA' THEN '0'
+                ELSE WORSTDAYSINARREARS
+            END
+        ) AS WORSTDAYSINARREARS,
+	TO_DATE(LISTINGDATE, 'DD-MM-YYYY') AS LISTINGDATE
+FROM
+	imke.tmp_crb_accounts@edwdblnk
+),
+date_to_check AS (
+SELECT
+	TO_DATE('01-02-2022', 'DD-MM-YYYY') - 365 AS date_year_ago,
+	TO_DATE('01-02-2022', 'DD-MM-YYYY') AS date_check
+FROM
+	dual
+)
+SELECT
+	NATIONALID,
+	CASE
+		WHEN SUM(CASE WHEN WORSTDAYSINARREARS BETWEEN 30 AND 59 
+                        AND LISTINGDATE BETWEEN (SELECT date_year_ago FROM date_to_check) 
+                                           AND (SELECT date_check FROM date_to_check)
+                       THEN 1 
+                       ELSE 0 
+                  END) > 0 
+         THEN 1
+		ELSE 0
+	END AS daysPastDueBetween30to59_in_12_months,
+	CASE
+		WHEN SUM(CASE WHEN WORSTDAYSINARREARS BETWEEN 60 AND 90 
+                        AND LISTINGDATE BETWEEN (SELECT date_year_ago FROM date_to_check) 
+                                           AND (SELECT date_check FROM date_to_check)
+                       THEN 1 
+                       ELSE 0 
+                  END) > 0 
+         THEN 1
+		ELSE 0
+	END AS dpd60_90_in_12_months,
+	CASE
+		WHEN SUM(CASE WHEN WORSTDAYSINARREARS > 90 
+                        AND LISTINGDATE BETWEEN (SELECT date_year_ago FROM date_to_check) 
+                                           AND (SELECT date_check FROM date_to_check)
+                       THEN 1 
+                       ELSE 0 
+                  END) > 0 
+         THEN 1
+		ELSE 0
+	END AS dpd_over_90_in_12_months
+FROM
+	cte
+GROUP BY
+	NATIONALID;
+
+-----------------------------------------------------------------
+---DISBURSED AMOUNT SUM PER YEAR--------
+
+----------------------------------------------------------------------------------
+
+WITH cte AS (
+    SELECT 
+        NATIONALID,
+        CASE 
+            WHEN REGEXP_LIKE(DISBURSMENTDATE, '^\d{2}-\d{2}-\d{4}$') 
+                THEN TO_DATE(DISBURSMENTDATE, 'DD-MM-YYYY') 
+            ELSE NULL 
+        END AS DISBURSMENTDATE,
+        CASE 
+            WHEN REGEXP_LIKE(PRINCIPALAMOUNT, '^\d+(\.\d+)?$') 
+                THEN TO_NUMBER(PRINCIPALAMOUNT) 
+            ELSE 0 
+        END AS PRINCIPALAMOUNT
+    FROM 
+        imke.tmp_crb_accounts@edwdblnk
+)
+SELECT 
+    NATIONALID,
+    SUM(CASE WHEN EXTRACT(YEAR FROM DISBURSMENTDATE) = 2017 THEN PRINCIPALAMOUNT ELSE 0 END) AS Total_2017,
+    SUM(CASE WHEN EXTRACT(YEAR FROM DISBURSMENTDATE) = 2018 THEN PRINCIPALAMOUNT ELSE 0 END) AS Total_2018,
+    SUM(CASE WHEN EXTRACT(YEAR FROM DISBURSMENTDATE) = 2019 THEN PRINCIPALAMOUNT ELSE 0 END) AS Total_2019,
+    SUM(CASE WHEN EXTRACT(YEAR FROM DISBURSMENTDATE) = 2020 THEN PRINCIPALAMOUNT ELSE 0 END) AS Total_2020,
+    SUM(CASE WHEN EXTRACT(YEAR FROM DISBURSMENTDATE) = 2021 THEN PRINCIPALAMOUNT ELSE 0 END) AS Total_2021,
+    SUM(CASE WHEN EXTRACT(YEAR FROM DISBURSMENTDATE) = 2022 THEN PRINCIPALAMOUNT ELSE 0 END) AS Total_2022
+FROM 
+    cte
+GROUP BY 
+    NATIONALID;
+   
+------------------------------------------
+--AMOUNT MAX, MIN ,AVG---------
+   ----------------------------------------------------------------
+WITH cte AS (
+    SELECT 
+        NATIONALID,
+        PRODUCT,
+        CASE 
+            WHEN REGEXP_LIKE(PRINCIPALAMOUNT, '^\d+(\.\d+)?$') 
+                THEN TO_NUMBER(PRINCIPALAMOUNT) 
+            ELSE NULL 
+        END AS PRINCIPALAMOUNT
+    FROM 
+        imke.tmp_crb_accounts@edwdblnk
+)
+SELECT 
+    NATIONALID,
+    PRODUCT,
+    MAX(PRINCIPALAMOUNT) AS MAX_AMOUNT,
+    MIN(PRINCIPALAMOUNT) AS MIN_AMOUNT,
+    AVG(PRINCIPALAMOUNT) AS AVG_AMOUNT
+FROM 
+    cte
+GROUP BY 
+    NATIONALID,
+    PRODUCT;
+   
+   
+ -------------------------------------------------------------
+-------PRODUCTCHECK--------------------------
+
+   
+WITH cte AS (
+    SELECT 
+        NATIONALID,
+        CASE 
+            WHEN PRODUCT LIKE '%Mobile%' OR 
+                 PRODUCT LIKE '%Personal%' OR 
+                 PRODUCT LIKE '%Business%' OR 
+                 PRODUCT LIKE '%Credit%' OR 
+                 PRODUCT LIKE '%Mortgage%' OR 
+                 PRODUCT LIKE '%asset finance%' OR 
+                 PRODUCT LIKE '%Trade finance%'
+                THEN 1 
+            ELSE 0 
+        END AS PRODUCT_EXISTS,
+        CASE 
+            WHEN REGEXP_LIKE(PRINCIPALAMOUNT, '^\d+(\.\d+)?$') 
+                THEN TO_NUMBER(PRINCIPALAMOUNT) 
+            ELSE NULL 
+        END AS PRINCIPALAMOUNT
+    FROM 
+        imke.tmp_crb_accounts@edwdblnk
+)
+SELECT 
+    NATIONALID,
+    MAX(PRODUCT_EXISTS) AS PRODUCT_EXISTS,
+    MAX(PRINCIPALAMOUNT) AS MAX_AMOUNT,
+    MIN(PRINCIPALAMOUNT) AS MIN_AMOUNT,
+    AVG(PRINCIPALAMOUNT) AS AVG_AMOUNT
+FROM 
+    cte
+GROUP BY 
+    NATIONALID;
+   
+   
+ 
+------------------------------------------------------------------
+-----LENGHTH WITH BUREAU-------------
+------------------------------------------------------------------
+
+   
+   WITH cte AS (
+    SELECT 
+        NATIONALID,
+        CASE 
+            WHEN REGEXP_LIKE(LISTINGDATE, '^\d{2}-\d{2}-\d{4}$') 
+                THEN TO_DATE(LISTINGDATE, 'DD-MM-YYYY') 
+            ELSE NULL 
+        END AS LISTINGDATE
+    FROM 
+        imke.tmp_crb_accounts@edwdblnk
+),
+cte2 AS (
+    SELECT 
+        NATIONALID,
+        (SYSDATE - LISTINGDATE) / 365 AS YEARS_PASSED
+    FROM 
+        cte
+)
+SELECT 
+    NATIONALID,
+    CASE WHEN YEARS_PASSED < 1 THEN 1 ELSE 0 END AS "1_year_length_of_bureau_history",
+    CASE WHEN YEARS_PASSED BETWEEN 2 AND 3 THEN 1 ELSE 0 END AS "2-3_years",
+    CASE WHEN YEARS_PASSED BETWEEN 3 AND 5 THEN 1 ELSE 0 END AS "3-5_years",
+    CASE WHEN YEARS_PASSED >= 5 THEN 1 ELSE 0 END AS "5+_years"
+FROM 
+    cte2;
+   
+   
+   
+--------------------------------------------------------------
+--------CHECK WITH LENDER------
+---------------------------------------------------------------------
+   
+SELECT 
+    NATIONALID,
+    SUM(CASE WHEN UPPER(LENDER) LIKE '%BANKS%' THEN 1 ELSE 0 END) AS BANKS_COUNT,
+    SUM(CASE WHEN UPPER(LENDER) LIKE '%MICROFINANCE%' THEN 1 ELSE 0 END) AS MICROFINANCE_COUNT,
+    SUM(CASE WHEN UPPER(LENDER) LIKE '%SACCO%' THEN 1 ELSE 0 END) AS SACCO_COUNT
+FROM 
+    imke.tmp_crb_accounts@edwdblnk
+GROUP BY 
+    NATIONALID;
